@@ -1,0 +1,40 @@
+--- EXECUTAR O SQL PARA CRIAR O KEEP-ALIVE NO SUPABASE ---
+
+-- 1. Ativa a extensão do cron
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- 2. Cria o schema e a tabela de controle
+CREATE SCHEMA IF NOT EXISTS _antigravity;
+CREATE TABLE IF NOT EXISTS _antigravity.keep_alive (
+    id SERIAL PRIMARY KEY,
+    last_ping TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    project_ref TEXT
+);
+
+-- 3. Insere o registro inicial (apenas se a tabela estiver vazia)
+INSERT INTO _antigravity.keep_alive (id, project_ref) 
+SELECT 1, current_setting('request.jwt.primary_owner', true)
+WHERE NOT EXISTS (SELECT 1 FROM _antigravity.keep_alive WHERE id = 1);
+
+-- 4. Cria a função responsável por simular a atividade
+CREATE OR REPLACE FUNCTION _antigravity.execute_keep_alive_ping()
+RETURNS void AS $$
+BEGIN
+    UPDATE _antigravity.keep_alive 
+    SET last_ping = NOW()
+    WHERE id = 1;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. Limpa agendamentos anteriores para evitar duplicidade
+SELECT cron.unschedule('antigravity-keep-alive') 
+FROM cron.job 
+WHERE jobname = 'antigravity-keep-alive';
+
+-- 6. Cria o novo agendamento (roda todos os dias à meia-noite UTC)
+SELECT cron.schedule('antigravity-keep-alive', '0 0 * * *', 'SELECT _antigravity.execute_keep_alive_ping()');
+
+-- 7. Confirmação (Se retornar uma linha aqui embaixo, está funcionando!)
+SELECT jobid, jobname, schedule, command, active 
+FROM cron.job 
+WHERE jobname = 'antigravity-keep-alive';
